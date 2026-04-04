@@ -1,0 +1,15 @@
+{
+    "High amount": "Large transactions deviate significantly from normal spending behavior, commonly seen in account takeover attacks.",
+    "Amount spike compared to previous": "Sudden increases in transaction volume often indicate a compromised account being drained quickly.",
+    "Very short time between transactions": "Rapid, successive transactions within seconds are indicative of automated scripts or bot activity attempting to bypass limits.",
+    "Location change detected": "Transactions initiated from a new geographical location that contradicts the user's recent history typically signal unauthorized external access.",
+    "Different device used": "Usage of an unrecognized smartphone or computer is a strong indicator of an account being accessed by an attacker.",
+    "VPN usage detected": "VPNs or proxy servers are frequently used by fraudsters to obscure their true IP address and evade geographical tracking.",
+    "High transaction frequency": "A burst of numerous transactions in a short period suggests card testing or systematic fund extraction.",
+    "Daily spending limit exceeded": "Exceeding the typical daily spending threshold drastically increases the risk that funds are being misappropriated.",
+    "Late night sudden purchase": "Purchases made during statistical sleeping hours drastically deviate from the user's biological routine and often point to foreign fraud rings operating in different time zones.",
+    "Duplicate charge detected": "Identical amounts charged back-to-back are a classic symptom of accidental double-swipes or aggressive card skimming tools reading the card multiple times.",
+    "Small pre-authorization test": "Extremely small transactions (like $1.00) are commonly used by credit card thieves to 'test' if a stolen card is active before making massive fraudulent purchases.",
+    "Unusual vendor category": "A sudden expensive purchase in a category the user has never interacted with before (e.g. high-end jewelry or crypto exchanges) is a massive red flag.",
+    "Cryptocurrency exchange detected": "Transactions to unregulated crypto wallets are a 90% indicator of ransomware payment attempts or high-risk capital flight."
+}
