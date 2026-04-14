@@ -1,6 +1,8 @@
-# Smart Digital Wallet Backend - Hackathon Project
+# AI-Wallet: Sentinel AI
 
-This is a complete, lightweight, and explainable backend system for a Smart Digital Wallet. It integrates a Node.js Express server with a Python-based Retrieval-Augmented Generation (RAG) system for AI fraud explanation, and features a local blockchain implementation.
+Sentinel AI is a premium, non-custodial crypto wallet featuring a real-time ML fraud detection engine. Our dynamic AI flags anomalies (spikes, VPNs, bad nodes) and uses RAG to clearly explain exactly why a transaction is dangerous before any funds ever leave your vault.
+
+This repository provides a complete, lightweight, and explainable backend system for a Smart Digital Wallet. It integrates a Node.js Express server with a Python-based Retrieval-Augmented Generation (RAG) system for AI fraud explanation, and features a local blockchain implementation.
 
 ---
 
