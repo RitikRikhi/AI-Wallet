@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
 import { X, ShieldCheck, ShieldAlert, AlertCircle, CheckCircle2, ArrowRightLeft, RefreshCw } from 'lucide-react';
 import api from '../utils/api';
 
@@ -8,13 +8,14 @@ interface Props {
   onClose: () => void;
   onSuccess: (assets: Record<string, number>, atxEarned: number) => void;
   onToast: (ok: boolean, msg: string) => void;
+  onAuditMetadata?: (flags: string[]) => void;
 }
 
 type Step = 'form' | 'scanning' | 'result' | 'done';
 
 const ASSET_PRICES: Record<string, number> = { SOL: 151.20, ETH: 3421.50, BTC: 65120.40, USDC: 1.00, ATX: 0.85 };
 
-export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props) {
+export default function SendModal({ wallet, onClose, onSuccess, onToast, onAuditMetadata }: Props) {
   const [step, setStep]           = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [asset, setAsset]         = useState('SOL');
@@ -33,6 +34,9 @@ export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props
     try {
       const res = await api.post('/send-crypto', { recipientAddress: recipient, asset, amount: parseFloat(amount), confirmed: false });
       setFraudResult(res.data);
+      if (res.data.fraudFlags && onAuditMetadata) {
+          onAuditMetadata(res.data.fraudFlags.map((f:any)=>f.message));
+      }
       setStep('result');
     } catch (e: any) {
       onToast(false, e.response?.data?.error || 'Scan failed');
@@ -61,7 +65,7 @@ export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       style={{ position:'fixed', inset:0, zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:24, background:'rgba(2,2,5,0.95)', backdropFilter:'blur(24px)' }}>
       <motion.div initial={{ scale:0.92, y:24 }} animate={{ scale:1, y:0 }} exit={{ scale:0.92, opacity:0 }}
-        className="glass-card" style={{ borderRadius:48, padding:52, maxWidth:520, width:'100%', position:'relative' }}>
+        className="glass-card" style={{ borderRadius:48, padding:52, maxWidth:520, width:'100%', position:'relative', maxHeight: '90vh', overflowY: 'auto' }}>
 
         <button onClick={onClose} style={{ position:'absolute', top:24, right:24, background:'rgba(255,255,255,0.05)', border:'none', borderRadius:12, padding:10, cursor:'pointer', color:'#6b7280' }}>
           <X size={18} />
@@ -71,7 +75,7 @@ export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props
         {step === 'form' && (
           <div>
             <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:36 }}>
-              <div style={{ background:'rgba(157,78,221,0.15)', padding:10, borderRadius:14 }}><ArrowRightLeft color="#9D4EDD" size={22}/></div>
+              <div style={{ background:'rgba(255,255,255,0.15)', padding:10, borderRadius:14 }}><ArrowRightLeft color="#FFFFFF" size={22}/></div>
               <div>
                 <h2 style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:26, fontWeight:900, letterSpacing:'-1px', marginBottom:2 }}>Send Crypto</h2>
                 <p style={{ fontSize:10, color:'#4b5563', fontWeight:900, letterSpacing:'0.2em', textTransform:'uppercase' }}>Sentinel AI scans before sending</p>
@@ -101,27 +105,28 @@ export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props
 
             <div style={{ background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)', borderRadius:16, padding:'14px 20px', marginBottom:28, display:'flex', justifyContent:'space-between' }}>
               <span style={{ fontSize:11, color:'#6b7280', fontWeight:700 }}>Available: {wallet.assets[asset]?.toFixed(4)} {asset}</span>
-              <span style={{ fontSize:11, color:'#9D4EDD', fontWeight:900 }}>≈ ${usdValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+              <span style={{ fontSize:11, color:'#FFFFFF', fontWeight:900 }}>≈ ${usdValue.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
             </div>
 
-            <button className="btn-primary" style={{ width:'100%', padding:'18px', fontSize:12 }} onClick={scanTransaction}>
-              <ShieldCheck size={16} /> Scan with Sentinel AI
+            <button className="btn-primary" style={{ width:'100%', padding:'18px', fontSize:12, background: 'linear-gradient(135deg, #111, #000)', border: '1px solid rgba(255,255,255,0.2)' }} onClick={scanTransaction}>
+              <ShieldCheck size={16} color="#fff" /> Initialize AI Validation Nodes
             </button>
-            <p style={{ textAlign:'center', marginTop:16, fontSize:10, color:'#374151', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.2em' }}>AI fraud check runs before any funds move</p>
+            <p style={{ textAlign:'center', marginTop:16, fontSize:10, color:'#374151', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.2em' }}>End-to-End Encrypted · 0-Knowledge Proofs</p>
           </div>
         )}
 
         {/* SCANNING */}
         {step === 'scanning' && (
           <div style={{ textAlign:'center', padding:'40px 0' }}>
-            <div style={{ width:80, height:80, borderRadius:'50%', background:'rgba(157,78,221,0.1)', border:'2px solid rgba(157,78,221,0.3)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 28px', animation:'glow-pulse 2s infinite' }}>
-              <RefreshCw color="#9D4EDD" size={32} style={{ animation:'spin 1s linear infinite' }} />
+            <div style={{ width:100, height:100, borderRadius:'50%', background:'linear-gradient(135deg, #111, #000)', border:'1px solid rgba(255,255,255,0.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 28px', position: 'relative' }}>
+              <div style={{ position: 'absolute', inset: -5, borderRadius: '50%', border: '2px dashed rgba(255,255,255,0.15)', animation: 'spin 4s linear infinite' }} />
+              <RefreshCw color="#fff" size={32} style={{ animation:'spin 1.5s linear infinite' }} />
             </div>
-            <h3 style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:24, fontWeight:900, marginBottom:12 }}>Scanning Transaction…</h3>
-            <p style={{ color:'#6b7280', fontSize:14 }}>Sentinel AI is cross-referencing 1.2M fraud vectors</p>
-            <div style={{ display:'flex', justifyContent:'center', gap:8, marginTop:28 }}>
-              {['Address verification','Amount analysis','Pattern matching','Risk scoring'].map((l,i)=>(
-                <div key={l} style={{ padding:'6px 14px', background:'rgba(157,78,221,0.08)', border:'1px solid rgba(157,78,221,0.15)', borderRadius:100, fontSize:9, color:'#9D4EDD', fontWeight:900, letterSpacing:'0.1em', textTransform:'uppercase', animation:`fadeIn 0.5s ${i*0.3}s both` }}>{l}</div>
+            <h3 style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:24, fontWeight:900, marginBottom:12 }}>Propagating to ML Nodes…</h3>
+            <p style={{ color:'#6b7280', fontSize:14 }}>Sentinel AI is cross-referencing your transaction.</p>
+            <div style={{ display:'flex', justifyContent:'center', gap:8, marginTop:32 }}>
+              {['Mempool Check','Heuristics','Simulated Trace','Vector Mapping'].map((l,i)=>(
+                <div key={l} style={{ padding:'8px 16px', background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:100, fontSize:9, color:'#fff', fontWeight:900, letterSpacing:'0.1em', textTransform:'uppercase', animation:`fadeIn 0.5s ${i*0.4}s both` }}>{l}</div>
               ))}
             </div>
           </div>
@@ -167,17 +172,17 @@ export default function SendModal({ wallet, onClose, onSuccess, onToast }: Props
 
             {/* AI explanation */}
             {fraudResult.explanation && (
-              <div style={{ background:'rgba(0,245,255,0.04)', border:'1px solid rgba(0,245,255,0.12)', borderRadius:16, padding:'16px 20px', marginBottom:28, fontSize:13, color:'#9ca3af', lineHeight:1.7, fontStyle:'italic' }}>
+              <div style={{ background:'rgba(200,200,200,0.04)', border:'1px solid rgba(200,200,200,0.12)', borderRadius:16, padding:'16px 20px', marginBottom:28, fontSize:13, color:'#9ca3af', lineHeight:1.7, fontStyle:'italic' }}>
                 "{fraudResult.explanation}"
               </div>
             )}
 
             {/* tx summary */}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:28 }}>
-              {[['Sending',`${amount} ${asset}`],['To',`${recipient.slice(0,10)}...`],['USD Value',`$${usdValue.toFixed(2)}`],['Network Fee','~$0.03']].map(([l,v])=>(
-                <div key={l} style={{ background:'rgba(255,255,255,0.02)', borderRadius:14, padding:'12px 16px' }}>
-                  <p style={{ fontSize:10, color:'#6b7280', fontWeight:900, textTransform:'uppercase', marginBottom:4 }}>{l}</p>
-                  <p style={{ fontWeight:900, fontSize:14 }}>{v}</p>
+              {[['Sending',`${amount} ${asset}`],['Recipient',`${recipient.slice(0,10)}...`],['Est. USD',`$${usdValue.toFixed(2)}`],['Network Fee',`~$${(Math.random() * 0.5 + 0.01).toFixed(3)}`]].map(([l,v])=>(
+                <div key={l} style={{ background:'rgba(255,255,255,0.02)', borderRadius:14, padding:'14px 18px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                  <p style={{ fontSize:10, color:'#6b7280', fontWeight:900, textTransform:'uppercase', letterSpacing: '0.1em', marginBottom:6 }}>{l}</p>
+                  <p style={{ fontWeight:900, fontSize:15, fontFamily: l==='Recipient' ? 'monospace' : 'inherit' }}>{v}</p>
                 </div>
               ))}
             </div>

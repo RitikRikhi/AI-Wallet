@@ -1,8 +1,23 @@
 const cryptoService = require('../services/cryptoService');
 const blockchainService = require('../services/blockchainService');
+const ragService = require('../services/ragService');
 
-// ─── Enhanced Wallet State Tracker ────────────────────────────────────────
-const userWallets = {}; // Map of userId to walletState
+const fs = require('fs');
+const path = require('path');
+
+const DB_PATH = path.join(__dirname, '../database.json');
+let userWallets = {};
+try {
+    if (fs.existsSync(DB_PATH)) {
+        userWallets = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    }
+} catch (e) { console.error('Failed to initialize DB:', e); }
+
+const saveDB = () => {
+    try {
+        fs.writeFileSync(DB_PATH, JSON.stringify(userWallets, null, 2));
+    } catch(e) { console.error('Error saving DB:', e); }
+};
 
 const ASSET_PRICES_USD = { SOL: 151.20, ETH: 3421.50, BTC: 65120.40, USDC: 1.00, ATX: 0.85, TRUMP: 15.42 };
 
@@ -15,47 +30,7 @@ const EXCHANGE_RATES = {
     TRUMP: { SOL: 0.10,   ETH: 0.0045,  BTC: 0.00023, USDC: 15.42, ATX: 18.14 }
 };
 
-const FRAUD_RULES = [
-    {
-        id: 'large_transaction',
-        check: (amount, asset) => {
-            const limits = { SOL: 80, ETH: 1.5, BTC: 0.08, USDC: 4000, ATX: 5000, TRUMP: 1000 };
-            return amount > (limits[asset] || 9999);
-        },
-        severity: 'HIGH', score: 35,
-        message: 'Amount exceeds normal transaction threshold for this asset'
-    },
-    {
-        id: 'round_amount_scam',
-        check: (amount) => amount >= 10 && amount === Math.floor(amount),
-        severity: 'MEDIUM', score: 22,
-        message: 'Round-number amounts are a common pattern in social engineering fraud'
-    },
-    {
-        id: 'new_recipient',
-        check: (amount, asset, recipient, known) => !known.includes(recipient),
-        severity: 'LOW', score: 15,
-        message: 'Recipient address has no prior history with this wallet'
-    },
-    {
-        id: 'self_transfer',
-        check: (amount, asset, recipient, known, callerAddress) => recipient === callerAddress,
-        severity: 'MEDIUM', score: 20,
-        message: 'Sending to your own wallet address detected'
-    },
-    {
-        id: 'malformed_address',
-        check: (amount, asset, recipient) => !recipient || recipient.length < 20,
-        severity: 'CRITICAL', score: 60,
-        message: 'Recipient address format is invalid or cannot be verified on-chain'
-    },
-    {
-        id: 'high_value_btc',
-        check: (amount, asset) => asset === 'BTC' && amount > 0.05,
-        severity: 'HIGH', score: 30,
-        message: 'High-value Bitcoin transaction triggers enhanced security review'
-    }
-];
+const fraudService = require('../services/fraudService');
 
 const getWalletState = (userId) => {
     if (!userId) return null;
@@ -75,11 +50,13 @@ const getUserByAddress = (address) => {
 const generateWallet = async (req, res) => {
     try {
         const userId = getUserId(req);
+        console.log(`Generating wallet for User-ID: ${userId}`);
         if (!userId) return res.status(401).json({ error: 'Missing user-id header' });
         
         const { initAssets } = req.body;
         
         if (!userWallets[userId]) {
+            console.log('Creating new wallet...');
             const mnemonic = cryptoService.generateMnemonic();
             const wallet = await cryptoService.deriveWallet(mnemonic);
             // Assign base assets or use custom ones
@@ -93,6 +70,7 @@ const generateWallet = async (req, res) => {
                 transactions: [],
                 knownAddresses: []
             };
+            saveDB();
         }
         res.json({ address: userWallets[userId].address, mnemonic: userWallets[userId].mnemonic });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -111,18 +89,43 @@ const getWalletInfo = async (req, res) => {
 const importWallet = async (req, res) => {
     try {
         const userId = getUserId(req);
+        console.log(`Importing wallet for User-ID: ${userId}`);
         if (!userId) return res.status(401).json({ error: 'Missing user-id header' });
         const { privateKey, publicKey, mode } = req.body;
         
         if (mode === 'private' && privateKey) {
-            const wallet = cryptoService.importFromPrivateKey(privateKey);
-            userWallets[userId] = {
-                connected: true,
-                address: wallet.address,
-                privateKey: wallet.privateKey,
-                assets: { SOL: 55.2, ETH: 5.5, BTC: 0.05, USDC: 1200.0, ATX: 500, TRUMP: 1000 },
-                transactions: [], knownAddresses: []
-            };
+            let wallet;
+            try {
+                wallet = cryptoService.importFromPrivateKey(privateKey);
+            } catch (e) {
+                return res.status(400).json({ error: 'Format Error: Needs a 64-char hex private key.' });
+            }
+
+            // ─── KEY FIX: Look for any existing account with this address ───────
+            const existingOwnerId = Object.keys(userWallets).find(
+                uid => userWallets[uid].address === wallet.address
+            );
+
+            if (existingOwnerId) {
+                // Restore the original wallet (with its history & balances) under the new session userId
+                console.log(`Restoring existing account for address: ${wallet.address}`);
+                userWallets[userId] = { ...userWallets[existingOwnerId], connected: true };
+                // If the session userId changed, remove the old ghost entry to keep DB clean
+                if (existingOwnerId !== userId) {
+                    delete userWallets[existingOwnerId];
+                }
+            } else {
+                // No existing account — create a fresh one with default assets
+                console.log(`Creating new wallet for address: ${wallet.address}`);
+                userWallets[userId] = {
+                    connected: true,
+                    address: wallet.address,
+                    privateKey: wallet.privateKey,
+                    assets: { SOL: 55.2, ETH: 5.5, BTC: 0.05, USDC: 1200.0, ATX: 500, TRUMP: 1000 },
+                    transactions: [], knownAddresses: []
+                };
+            }
+            saveDB();
             return res.json({ message: 'Wallet imported', address: wallet.address });
         } else if (mode === 'public' && publicKey) {
             userWallets[userId] = {
@@ -132,6 +135,7 @@ const importWallet = async (req, res) => {
                 assets: { SOL: 10.5, ETH: 5.5, BTC: 0.01, USDC: 200.0, ATX: 100, TRUMP: 50 },
                 transactions: [], knownAddresses: []
             };
+            saveDB();
             return res.json({ message: 'Observation wallet connected', address: publicKey });
         }
         return res.status(400).json({ error: 'Invalid import data' });
@@ -156,25 +160,21 @@ const sendCrypto = async (req, res) => {
         if (walletState.assets[asset] < numAmount)
             return res.status(400).json({ error: `Insufficient ${asset} balance` });
 
-        let riskScore = 0;
-        const triggeredRules = [];
+        const evaluation = fraudService.evaluateFraudRisk(
+            userId, numAmount, asset, recipientAddress, walletState.knownAddresses, walletState.address
+        );
+        let riskScore = evaluation.riskScore;
+        const triggeredRules = evaluation.fraudFlags;
 
-        for (const rule of FRAUD_RULES) {
-            if (rule.check(numAmount, asset, recipientAddress, walletState.knownAddresses, walletState.address)) {
-                riskScore += rule.score;
-                triggeredRules.push({ id: rule.id, severity: rule.severity, message: rule.message });
+        // Fetch dynamic explanation from the RAG Service
+        let explanation = 'No fraud patterns detected. Transaction appears safe.';
+        if (triggeredRules.length > 0) {
+            try {
+                explanation = await ragService.explainFraudWithRAG(triggeredRules.map(f => f.message));
+            } catch (e) {
+                explanation = `System analyzed ${triggeredRules.length} anomaly vectors. Risk: ${riskScore}/100. Primary Flag: "${triggeredRules[0].message}"`;
             }
         }
-
-        riskScore = Math.min(riskScore, 100);
-
-        const explanation = triggeredRules.length > 0
-            ? `Sentinel AI scanned this transaction against 1.2M fraud vectors. Risk score: ${riskScore}/100. ` +
-              `Primary flag: "${triggeredRules[0].message}". ` +
-              (riskScore >= 70 ? 'Transaction has been BLOCKED for your protection. Do not proceed.'
-               : riskScore >= 30 ? 'Moderate risk detected. Verify recipient before confirming.'
-               : 'Low risk — proceed with standard caution.')
-            : 'No fraud patterns detected. Transaction appears safe.';
 
         if (riskScore >= 70 && !confirmed)
             return res.json({ status: 'blocked', riskScore, fraudFlags: triggeredRules, explanation });
@@ -223,8 +223,17 @@ const sendCrypto = async (req, res) => {
                 recipientWallet.knownAddresses.push(walletState.address);
             }
         }
-
+        
+        saveDB();
         return res.json({ status: 'confirmed', transaction: tx, assets: walletState.assets, atxEarned });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+};
+
+const getSystemHub = async (req, res) => {
+    try {
+        const chain = blockchainService.getChain();
+        // Return latest 20 blocks
+        res.json({ chain: chain.slice(-20).reverse() });
     } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
@@ -269,6 +278,7 @@ const swapCrypto = async (req, res) => {
         };
 
         walletState.transactions.unshift(tx);
+        saveDB();
         res.json({ success: true, assets: walletState.assets, transaction: tx, atxEarned });
     } catch (e) { res.status(500).json({ error: e.message }); }
 };
@@ -281,21 +291,43 @@ const getTransactions = async (req, res) => {
 };
 
 const explainFraud = async (req, res) => {
-    const { reasons = [] } = req.body;
-    const explanation = `Sentinel AI (RAG-V2) cross-referenced ${reasons.length} risk indicator(s) against ` +
-        `1.2M known fraud patterns. Identified signals: ${reasons.join('; ')}. ` +
-        `Recommendation: Block transaction and verify recipient through a secondary channel.`;
-    res.json({ explanation, confidence: 0.97, model: 'sentinel-rag-v2' });
+    try {
+        const { reasons = [] } = req.body;
+        console.log('Generating RAG explanation for:', reasons);
+        const explanation = await ragService.explainFraudWithRAG(reasons);
+        res.json({ explanation, confidence: 0.97, model: 'sentinel-rag-v2' });
+    } catch (e) {
+        console.error('RAG Error:', e);
+        res.status(500).json({ error: 'Sentinel AI is currently unavailable' });
+    }
 };
 
 const addFraudRule = async (req, res) =>
     res.json({ success: true, message: 'Rule synced to Sentinel AI knowledge base' });
 
 const demoLogin = async (req, res) => {
+    console.log('Login attempt:', req.body);
     const { provider = 'google', profile = {} } = req.body;
     
-    // For signup, allow user to specify a custom ID or email
-    const id = profile.email || `user_${Date.now()}`;
+    let id;
+
+    // ─── KEY FIX: If a private key is provided, derive wallet address as the stable userId ───
+    if (profile.privateKey) {
+        try {
+            const derived = cryptoService.importFromPrivateKey(profile.privateKey);
+            // Use the wallet address as a deterministic, permanent userId
+            id = `wallet_${derived.address}`;
+            console.log(`Private key login — stable userId: ${id}`);
+        } catch (e) {
+            // Bad private key — fall back to timestamp (will fail on import too)
+            console.warn('Could not derive address from private key:', e.message);
+            id = `user_${Date.now()}`;
+        }
+    } else {
+        // Signup flow: use email if provided, else timestamp
+        id = profile.email || `user_${Date.now()}`;
+    }
+
     const session = {
         userId: id,
         name: profile.name || 'Test User',
@@ -310,6 +342,6 @@ const demoLogin = async (req, res) => {
 module.exports = {
     generateWallet, getWalletInfo, importWallet,
     sendCrypto, swapCrypto, getTransactions,
-    explainFraud, addFraudRule, demoLogin
+    explainFraud, addFraudRule, demoLogin, getSystemHub
 };
 

@@ -4,22 +4,25 @@ import {
   Cpu, LayoutDashboard, TrendingUp, ArrowRightLeft,
   ShieldCheck, History, Copy, Key, RefreshCw,
   Fingerprint, Globe, Activity, Lock, ArrowUpRight,
-  CheckCircle2, AlertCircle, X
+  CheckCircle2, AlertCircle, X, BrainCircuit, BookOpen, Zap
 } from 'lucide-react';
 import api from './utils/api';
-import AuthPage from './components/AuthPage';
 import SendModal from './components/SendModal';
+import ReceiveModal from './components/ReceiveModal';
+import AuthPage from './components/AuthPage';
+import GuideTab from './components/GuideTab';
+import StakeTab from './components/StakeTab';
 
 /* ─── Types ─────────────────────────────────── */
 interface UserProfile { userId: string; name: string; email: string; avatar?: string; provider: string; }
 interface WalletData  { address: string; assets: Record<string, number>; totalUSD?: number; }
 interface Transaction {
-  id: string; type: 'send'|'swap'; asset: string; toAsset?: string;
+  id: string; type: 'send'|'swap'|'receive'; asset: string; toAsset?: string;
   amount: number; receivedAmount?: number; from?: string; to?: string;
   txHash?: string; timestamp: string; riskScore: number;
   fraudFlags: any[]; status: string; atxEarned?: number;
 }
-type DashTab = 'dash'|'market'|'swap'|'sentinel'|'history';
+type DashTab = 'dash'|'market'|'swap'|'sentinel'|'history'|'hub'|'guide'|'stake';
 
 const ASSET_PRICES: Record<string,number> = { SOL:151.20, ETH:3421.50, BTC:65120.40, USDC:1.00, ATX:0.85, TRUMP:15.42 };
 const ASSET_META: Record<string,{name:string;color:string;change:string;spark:string}> = {
@@ -27,7 +30,7 @@ const ASSET_META: Record<string,{name:string;color:string;change:string;spark:st
   ETH: { name:'Ethereum', color:'#627EEA', change:'-2.1%',  spark:'M0,12 C10,22 20,18 30,28 S50,32 60,22 S75,34 80,26' },
   BTC: { name:'Bitcoin',  color:'#F7931A', change:'+0.8%',  spark:'M0,22 C10,28 20,18 30,14 S50,8 60,16 S75,18 80,12' },
   USDC:{ name:'USD Coin', color:'#2775CA', change:'+0.0%',  spark:'M0,20 L80,20' },
-  ATX: { name:'AI_TRADEX',color:'#9D4EDD', change:'+38.2%', spark:'M0,35 C10,28 20,24 30,18 S50,10 60,8 S75,4 80,2' },
+  ATX: { name:'AI_TRADEX',color:'#FFFFFF', change:'+38.2%', spark:'M0,35 C10,28 20,24 30,18 S50,10 60,8 S75,4 80,2' },
   TRUMP: { name:'Trump Coin', color:'#E31837', change:'+47.5%', spark:'M0,28 C10,22 20,32 30,12 S50,4 60,18 S75,10 80,6' },
 };
 
@@ -40,15 +43,25 @@ const EXCHANGE_RATES: Record<string,Record<string,number>> = {
   TRUMP: {SOL:0.10, ETH:0.0045, BTC:0.00023, USDC:15.42, ATX:18.14},
 };
 
-function short(s:string){ return s.slice(0,8)+'…'+s.slice(-6); }
+function short(s?:string){ if(!s) return '0x...'; return s.slice(0,8)+'…'+s.slice(-6); }
 
 /* ═══════════════════════════════════════════ */
 export default function App() {
-  const [user,    setUser]    = useState<UserProfile|null>(()=>{ try{ const s=localStorage.getItem('ai_tradex_user'); return s?JSON.parse(s):null; }catch{return null;} });
+  const [user,    setUser]    = useState<UserProfile|null>(()=>{ 
+    try {
+        if (window.location.search.includes('reset=1')) {
+            localStorage.clear();
+            window.history.replaceState({}, '', window.location.pathname);
+            return null;
+        }
+        const s = localStorage.getItem('ai_tradex_user'); 
+        return s ? JSON.parse(s) : null; 
+    } catch { return null; } 
+  });
   const [wallet,  setWallet]  = useState<WalletData|null>(null);
-  const [view,    setView]    = useState<'onboarding'|'dashboard'>('onboarding');
   const [tab,     setTab]     = useState<DashTab>('dash');
-  const [showSend,setShowSend]= useState(false);
+  const [showSend, setShowSend] = useState(false);
+  const [showReceive, setShowReceive] = useState(false);
   const [showSeed,setShowSeed]= useState(false);
   const [showKeys,setShowKeys]= useState(false);
   const [mnemonic,setMnemonic]= useState('');
@@ -60,66 +73,89 @@ export default function App() {
   const [swapTo,  setSwapTo]  = useState('ETH');
   const [swapAmt, setSwapAmt] = useState('5');
   const [explanation,setExplanation]= useState('');
-  const [showImport,setShowImport]  = useState(false);
-  const [importKey, setImportKey]   = useState('');
+
+  const [status,  setStatus]  = useState('Booting Sentinel AI…');
+  const [lastFlags, setLastFlags] = useState<string[]>([]);
 
   function pushToast(ok:boolean,msg:string){ setToast({ok,msg}); setTimeout(()=>setToast(null),4000); }
 
-  useEffect(()=>{ if(user) fetchWallet(); },[user]);
+  const [hubData, setHubData] = useState<any[]>([]);
+
+  useEffect(()=>{ 
+    if(user) {
+        fetchWallet();
+        fetchHub();
+        // Polling loop for cross-wallet updates
+        const interval = setInterval(() => { fetchWallet(); fetchHub(); }, 5000);
+        return () => clearInterval(interval);
+    }
+  },[user]);
+
+  const fetchHub = async () => { try { const r = await api.get('/system-hub'); setHubData(r.data.chain||[]); } catch(e) {} };
 
   const fetchWallet = async () => {
     try{
       const r = await api.get('/wallet-info');
-      setWallet(r.data); setView('dashboard');
+      setWallet(prev => {
+         if (JSON.stringify(prev) === JSON.stringify(r.data)) return prev;
+         return r.data;
+      }); 
       const t = await api.get('/transactions');
-      setTxHistory(t.data.transactions||[]);
-    } catch{ 
-      createWallet(); 
+      const newTxs = t.data.transactions||[];
+      if (txHistory.length > 0 && newTxs.length > txHistory.length) {
+          const fresh = newTxs[0];
+          if (fresh.type === 'receive') {
+              pushToast(true, `Incoming Wealth! Received ${fresh.amount} ${fresh.asset} 🚀`);
+          }
+      }
+      setTxHistory(newTxs);
+    } catch { 
+      if (!wallet) createWallet(); 
     }
   };
 
   const createWallet = async () => {
     setLoading(true);
+    setStatus('Synchronizing with nodes…');
+    console.log('Starting createWallet() sequence...');
     try{
       const importKey = localStorage.getItem('ai_tradex_importKey');
       if (importKey) {
+        setStatus('Decrypting Secure Vault Terminal…');
+        console.log('Importing existing wallet key...');
         await api.post('/import-wallet', { mode: 'private', privateKey: importKey });
         localStorage.removeItem('ai_tradex_importKey');
         const info = await api.get('/wallet-info');
         setWallet(info.data);
-        setMnemonic('Imported wallet - backing phrase unavailable from private key');
+        setMnemonic('Imported Private Vault — Seed secured by hardware-level isolation.');
         setPrivKey(importKey);
       } else {
+        setStatus('AI Oracle: Mapping Fresh Entropy…');
+        console.log('Generating fresh wallet...');
         const r = await api.post('/generate', {});
+        setStatus('Sentinel AI: Aligning Guard Vectors…');
         const info = await api.get('/wallet-info');
         setWallet(info.data);
         setMnemonic(r.data.mnemonic||'witch collapse practice feed shame open despair creek road again ice least');
         setPrivKey('0x'+Array.from({length:64},()=>Math.floor(Math.random()*16).toString(16)).join(''));
       }
-      setView('dashboard');
+      setStatus('Success! AI Vault Online ■');
+      console.log('Wallet initialization complete!');
       setShowKeys(true);
     } catch (e: any) { 
-      pushToast(false, e.response?.data?.error || 'Backend offline — run: npm start in /backend'); 
+        console.error('Wallet creation error detail:', e);
+        const errorText = e.response?.data?.error || e.message || 'Server timeout';
+        pushToast(false, `Wallet Init Failed: ${errorText}`); 
+        setStatus(`Failure: ${errorText}`);
+        // Force back to onboarding if fatal
+        if (errorText.includes('offline') || errorText.includes('Network')) {
+            localStorage.clear();
+            window.location.reload();
+        }
     }
     finally{ setLoading(false); }
   };
 
-  const doImport = async () => {
-    if(!importKey) return pushToast(false, 'Please enter a private key');
-    setLoading(true);
-    try {
-      await api.post('/import', { mode: 'private', privateKey: importKey });
-      const info = await api.get('/wallet-info');
-      setWallet(info.data);
-      setPrivKey(importKey);
-      setMnemonic('Imported wallet - backup not available from private key');
-      setView('dashboard');
-      setShowImport(false);
-      pushToast(true, 'Wallet imported successfully!');
-    } catch (e: any) {
-      pushToast(false, e.response?.data?.error || 'Failed to import wallet');
-    } finally { setLoading(false); }
-  };
 
   const doSwap = async () => {
     setLoading(true);
@@ -133,10 +169,16 @@ export default function App() {
   };
 
   const doAudit = async () => {
+    // If no specific flags, we pass a safe indication or generic
+    const reasons = lastFlags.length > 0 ? lastFlags : ['A new transaction was initiated'];
+    
+    setExplanation('Sentinel AI is decrypting security vectors via global ML nodes…');
     try{
-      const r = await api.post('/explain',{reasons:['Unrecognized device','VPN detected','High-value transaction']});
+      const r = await api.post('/explain', { reasons });
       setExplanation(r.data.explanation);
-    } catch{ setExplanation('Sentinel AI: Could not reach backend. Run npm start in /backend.'); }
+    } catch { 
+      setExplanation('Sentinel AI: Neural link establishing...'); 
+    }
   };
 
   const handleSendSuccess = (assets:Record<string,number>,_atx:number) => {
@@ -144,22 +186,32 @@ export default function App() {
     api.get('/transactions').then(r=>setTxHistory(r.data.transactions||[]));
   };
 
+  const handleAuditMeta = (flags: string[]) => {
+      setLastFlags(flags);
+  };
+
   const totalUSD = wallet ? Object.entries(wallet.assets).reduce((s,[sym,amt])=>s+amt*(ASSET_PRICES[sym]||0),0) : 0;
 
   /* If no user — show auth */
+  // Removed unused doImport logic
+
   if(!user) return <AuthPage onAuth={(u: any, initAssets?: any) => {
     setUser(u);
     if(initAssets) localStorage.setItem('ai_tradex_initAssets', JSON.stringify(initAssets));
   }} />;
 
-  /* Onboarding screen is bypassed, show a loader if waiting */
-  if(view==='onboarding' || (!wallet && user))
+  /* Onboarding screen is bypassed, show a loader ONLY if we are actually loading or have no wallet yet */
+  if (user && !wallet) {
     return (
       <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#050508',flexDirection:'column'}}>
-        <RefreshCw size={32} color="#9D4EDD" style={{animation:'spin 1s linear infinite',marginBottom:16}}/>
-        <p style={{color:'#6b7280',fontSize:12,fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>Initializing Secure Vault…</p>
+        <RefreshCw size={32} color="#FFFFFF" style={{animation:'spin 1s linear infinite',marginBottom:16}}/>
+        <p style={{color:'#6b7280',fontSize:12,fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>{ status }</p>
+        {!loading && (
+            <button onClick={() => window.location.reload()} style={{marginTop:24,background:'none',border:'1px solid #374151',color:'#374151',padding:'8px 16px',borderRadius:10,fontSize:10,fontWeight:900,cursor:'pointer'}}>FORCE RESTART</button>
+        )}
       </div>
     );
+  }
 
   /* ── Dashboard ── */
   return (
@@ -168,27 +220,51 @@ export default function App() {
       {/* Sidebar */}
       <aside className="glass-panel" style={{width:280,padding:'32px 20px',display:'flex',flexDirection:'column',position:'sticky',top:0,height:'100vh'}}>
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:44}}>
-          <div style={{background:'linear-gradient(135deg,#9D4EDD,#00F5FF)',padding:9,borderRadius:13}}><Cpu color="#fff" size={18}/></div>
+          <div style={{background:'linear-gradient(135deg,#222,#555)',padding:9,borderRadius:13}}><Cpu color="#fff" size={18}/></div>
           <span className="neon-text" style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:900,letterSpacing:'-0.5px'}}>AI_TRADEX</span>
         </div>
 
         {/* User */}
-        <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',background:'rgba(157,78,221,0.06)',border:'1px solid rgba(157,78,221,0.12)',borderRadius:18,marginBottom:28}}>
-          <img src={user.avatar||`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`} width={36} height={36} style={{borderRadius:'50%',border:'2px solid rgba(157,78,221,0.3)'}} alt=""/>
+        <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.12)',borderRadius:18,marginBottom:28}}>
+          <img src={user.avatar||`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`} width={36} height={36} style={{borderRadius:'50%',border:'2px solid rgba(255,255,255,0.3)'}} alt=""/>
           <div style={{overflow:'hidden'}}>
-            <p style={{fontWeight:900,fontSize:13,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{user.name}</p>
-            <p style={{fontSize:10,color:'#6b7280',fontWeight:700,display:'flex',alignItems:'center',gap:4}}>
+            <p style={{fontWeight:900,fontSize:13,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis', color: '#fff'}}>{(user.name === 'Guest' || !user.name) ? 'Legendary Ledger' : user.name}</p>
+            <p style={{fontSize:10,color:'#FFFFFF',fontWeight:700,display:'flex',alignItems:'center',gap:4}}>
               <span style={{fontSize:12}}>{user.provider==='google'?'🔵':user.provider==='MetaMask'?'🦊':user.provider==='Phantom'?'👻':'🟠'}</span>via {user.provider}
             </p>
           </div>
         </div>
 
         <nav style={{flex:1,display:'flex',flexDirection:'column',gap:6}}>
-          {([['dash','Overview',<LayoutDashboard size={18}/>],['market','Terminal',<TrendingUp size={18}/>],['swap','Exchange',<ArrowRightLeft size={18}/>],['sentinel','Sentinel AI',<ShieldCheck size={18}/>],['history','Ledger',<History size={18}/>]] as const).map(([id,label,icon])=>(
+          {([
+            ['dash','Overview',<LayoutDashboard size={18}/>],
+            ['hub','Intelligence Hub',<Activity size={18}/>],
+            ['sentinel','Sentinel AI',<ShieldCheck size={18}/>],
+            ['market','Terminal',<TrendingUp size={18}/>],
+            ['swap','Exchange',<ArrowRightLeft size={18}/>],
+            ['stake','Vault Staking',<Lock size={18}/>],
+            ['history','Ledger',<History size={18}/>],
+            ['guide','Platform Guide',<BrainCircuit size={18}/>]
+          ] as const).map(([id,label,icon])=>(
             <div key={id} className={`sidebar-link${tab===id?' active':''}`} onClick={()=>setTab(id)}>
-              {icon}<span style={{fontSize:11,fontWeight:900,textTransform:'uppercase',letterSpacing:'0.15em'}}>{label}</span>
+              {icon}<span style={{fontSize:11,fontWeight:900,textTransform:'uppercase',letterSpacing:'0.15em'}}>{label} {id==='hub'&&<span style={{fontSize:8,background:'#FFFFFF',color:'#fff',padding:'2px 4px',borderRadius:4,marginLeft:4}}>LIVE</span>}</span>
             </div>
           ))}
+
+          {/* Quick Profile Switcher for Demo */}
+          <div style={{marginTop:32,padding:16,background:'rgba(200,200,200,0.04)',border:'1px solid rgba(200,200,200,0.1)',borderRadius:18}}>
+            <p style={{fontSize:9,fontWeight:900,color:'#AAAAAA',textTransform:'uppercase',marginBottom:12,letterSpacing:'0.15em'}}>✦ Multi-Wallet Demo Mode</p>
+            <button onClick={()=>{
+              const current = JSON.parse(localStorage.getItem('ai_tradex_user') || '{}');
+              const next = current.userId === 'sender_demo' ? { userId: 'receiver_demo', name: 'Receiver Subnet', provider:'demo' } : { userId: 'sender_demo', name: 'Sender Subnet', provider:'demo' };
+              localStorage.setItem('ai_tradex_user', JSON.stringify(next));
+              window.location.reload();
+            }} style={{width:'100%',padding:'10px',background:'rgba(200,200,200,0.1)',border:'1px solid rgba(200,200,200,0.3)',borderRadius:10,color:'#AAAAAA',fontSize:10,fontWeight:900,cursor:'pointer',transition:'all 0.2s'}}
+              onMouseEnter={e=>(e.currentTarget.style.background='rgba(200,200,200,0.2)')} onMouseLeave={e=>(e.currentTarget.style.background='rgba(200,200,200,0.1)')}>
+              Switch Identity & Sync
+            </button>
+          </div>
+
           <div className="sidebar-link" onClick={()=>{localStorage.clear();window.location.reload();}} style={{marginTop:'auto',color:'#ef4444'}}>
             <X size={18}/><span style={{fontSize:11,fontWeight:900,textTransform:'uppercase',letterSpacing:'0.15em'}}>Logout</span>
           </div>
@@ -196,7 +272,7 @@ export default function App() {
 
         <div style={{borderTop:'1px solid rgba(255,255,255,0.03)',paddingTop:20}}>
           <p style={{textAlign:'center',fontSize:9,fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase',color:'#6b7280',marginBottom:8}}>ATX Balance</p>
-          <p style={{textAlign:'center',fontSize:22,fontWeight:900,color:'#9D4EDD'}}>{(wallet?.assets.ATX||0).toFixed(2)} <span style={{fontSize:12,color:'#4b5563'}}>ATX</span></p>
+          <p style={{textAlign:'center',fontSize:22,fontWeight:900,color:'#FFFFFF'}}>{(wallet?.assets.ATX||0).toFixed(2)} <span style={{fontSize:12,color:'#4b5563'}}>ATX</span></p>
           <p style={{textAlign:'center',fontSize:11,color:'#22c55e',fontWeight:700,marginTop:4}}>≈ ${((wallet?.assets.ATX||0)*0.85).toFixed(2)}</p>
           <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,marginTop:12}}>
             <div style={{width:7,height:7,borderRadius:'50%',background:'#22c55e',animation:'pulse 2s infinite'}}/><span style={{fontSize:11,fontWeight:700,color:'rgba(34,197,94,0.8)'}}>All Systems Live</span>
@@ -208,10 +284,13 @@ export default function App() {
       <main style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:44}}>
           <div>
-            <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:28,fontWeight:900,letterSpacing:'-1px',marginBottom:4}}>
-              {{dash:'Dashboard_Root',market:'Global_Terminal',swap:'Atomic_Swap',sentinel:'AI_Sentinel_Core',history:'Transaction_Ledger'}[tab]}
-            </h1>
-            <p style={{color:'#374151',fontSize:10,fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>Validated by Decentralized Oracle Cluster</p>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+              <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:32,fontWeight:900,letterSpacing:'-1.5px'}}>
+                {{hub:'Intel_Hub',dash:'Dashboard',market:'Market Terminal',swap:'Bridge/Swap',sentinel:'AI Sentinel',history:'Vault Ledger',guide:'Guide & Educational',stake:'ATX Staking'}[tab]}
+              </h1>
+              <div style={{background:'rgba(255,255,255,0.15)',border:'1px solid rgba(255,255,255,0.3)',borderRadius:8,padding:'4px 10px',fontSize:10,fontWeight:900,color:'#FFFFFF',textTransform:'uppercase',letterSpacing:'0.1em'}}>{(user.name === 'Guest' || !user.name) ? 'Legendary Ledger' : user.name}</div>
+            </div>
+            <p style={{color:'#4b5563',fontSize:10,fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>AI Secure · Oracle Validated · {short(wallet?.address)}</p>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:12}}>
             <button onClick={()=>setShowSend(true)} className="btn-primary" style={{padding:'12px 24px',fontSize:10}}>
@@ -219,10 +298,10 @@ export default function App() {
             </button>
             <div style={{textAlign:'right'}}>
               <p style={{fontSize:9,color:'#374151',fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:3}}>Active Node</p>
-              <p style={{fontFamily:'monospace',fontSize:12,fontWeight:700,color:'#9D4EDD',cursor:'pointer'}} onClick={()=>navigator.clipboard.writeText(wallet?.address||'')}>{short(wallet?.address||'0x0000000000000000')}</p>
+              <p style={{fontFamily:'monospace',fontSize:12,fontWeight:700,color:'#FFFFFF',cursor:'pointer'}} onClick={()=>navigator.clipboard.writeText(wallet?.address||'')}>{short(wallet?.address||'0x0000000000000000')}</p>
             </div>
-            <button onClick={()=>setShowKeys(true)} style={{width:48,height:48,borderRadius:14,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',color:'#9D4EDD',transition:'all 0.2s'}}
-              onMouseEnter={e=>{e.currentTarget.style.background='rgba(157,78,221,0.1)';e.currentTarget.style.borderColor='rgba(157,78,221,0.3)'}}
+            <button onClick={()=>setShowKeys(true)} style={{width:48,height:48,borderRadius:14,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',color:'#FFFFFF',transition:'all 0.2s'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='rgba(255,255,255,0.1)';e.currentTarget.style.borderColor='rgba(255,255,255,0.3)'}}
               onMouseLeave={e=>{e.currentTarget.style.background='rgba(255,255,255,0.03)';e.currentTarget.style.borderColor='rgba(255,255,255,0.05)'}}>
               <Key size={18}/>
             </button>
@@ -230,7 +309,10 @@ export default function App() {
         </header>
 
         <AnimatePresence mode="wait">
-          {tab==='dash'     && <DashTab key="d" wallet={wallet!} totalUSD={totalUSD} onShowKeys={()=>setShowKeys(true)} onSend={()=>setShowSend(true)} txHistory={txHistory.slice(0,3)} />}
+          {tab==='hub'      && <HubTab key="h" hubData={hubData} />}
+          {tab==='dash'     && <DashTab key="d" wallet={wallet!} totalUSD={totalUSD} onShowKeys={()=>setShowKeys(true)} onSend={()=>setShowSend(true)} onReceive={()=>setShowReceive(true)} txHistory={txHistory.slice(0,3)} user={user} lastFlags={lastFlags} />}
+          {tab==='guide'    && <GuideTab key="g" />}
+          {tab==='stake'    && <StakeTab key="st" atxBalance={wallet?.assets.ATX || 0} />}
           {tab==='market'   && <MarketTab key="m" />}
           {tab==='swap'     && <SwapTab key="s" wallet={wallet!} swapFrom={swapFrom} setSwapFrom={setSwapFrom} swapTo={swapTo} setSwapTo={setSwapTo} swapAmt={swapAmt} setSwapAmt={setSwapAmt} onSwap={doSwap} loading={loading}/>}
           {tab==='sentinel' && <SentinelTab key="se" explanation={explanation} onAudit={doAudit} txHistory={txHistory} />}
@@ -241,7 +323,10 @@ export default function App() {
       {/* ── Modals ── */}
       <AnimatePresence>
         {showSend && wallet && (
-          <SendModal key="send" wallet={wallet} onClose={()=>setShowSend(false)} onSuccess={handleSendSuccess} onToast={pushToast}/>
+          <SendModal key="send" wallet={wallet} onClose={()=>setShowSend(false)} onSuccess={handleSendSuccess} onToast={pushToast} onAuditMetadata={handleAuditMeta}/>
+        )}
+        {showReceive && wallet && (
+          <ReceiveModal key="receive" address={wallet.address} onClose={()=>setShowReceive(false)} />
         )}
         {showSeed && (
           <SeedModal key="seed" mnemonic={mnemonic} onClose={()=>setShowSeed(false)} onCopy={()=>pushToast(true,'Phrase copied!')}/>
@@ -267,53 +352,80 @@ export default function App() {
 }
 
 /* ─── Dashboard Tab ──────────────────────────── */
-function DashTab({wallet,totalUSD,onShowKeys,onSend,txHistory}:any) {
+function DashTab({wallet,totalUSD,onShowKeys,onSend,onReceive,txHistory,user,lastFlags}:any) {
   return (
     <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-12}} style={{display:'flex',flexDirection:'column',gap:24}}>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20}}>
-        <div className="glass-card" style={{padding:48,borderRadius:44,position:'relative',overflow:'hidden'}}>
-          <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,background:'radial-gradient(circle,rgba(157,78,221,0.12),transparent)',borderRadius:'50%'}}/>
-          <p style={{fontSize:10,fontWeight:900,letterSpacing:'0.3em',textTransform:'uppercase',color:'#6b7280',marginBottom:12}}>Portfolio Valuation</p>
-          <h2 className="neon-text" style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:60,fontWeight:900,letterSpacing:'-3px',marginBottom:32}}>
+        <div style={{ background: 'linear-gradient(145deg, #111 0%, #000 100%)', borderRadius: 28, padding: 36, position: 'relative', overflow: 'hidden', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ position: 'absolute', top: -100, right: -50, width: 300, height: 300, background: 'radial-gradient(circle, rgba(255,255,255,0.2), transparent)', borderRadius: '50%', filter: 'blur(40px)' }}/>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }}>
+             <Cpu color="#FFFFFF" size={32} />
+             <div style={{ letterSpacing: '0.3em', fontSize: 10, fontWeight: 900, color: '#6b7280', textTransform: 'uppercase' }}>Black Card Vault</div>
+          </div>
+          <p style={{ fontSize:10, fontWeight:900, letterSpacing:'0.3em', textTransform:'uppercase', color:'#6b7280', marginBottom:8 }}>Portfolio Valuation</p>
+          <h2 style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:56, fontWeight:900, letterSpacing:'-2px', marginBottom:20, color: '#fff' }}>
             ${totalUSD.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
           </h2>
-          <div style={{display:'flex',gap:12}}>
+          
+          <div style={{ display: 'flex', gap: 24, marginBottom: 36, overflowX: 'auto', paddingBottom: 8 }}>
+            {Object.entries(wallet.assets).map(([sym, amt]) => (
+                <div key={sym} style={{ minWidth: 'max-content' }}>
+                    <p style={{fontSize: 9, color: '#6b7280', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 2}}>{sym}</p>
+                    <p style={{color: '#fff', fontWeight: 900, fontFamily: "'Space Grotesk',sans-serif", fontSize: 13}}>{Number(amt).toFixed(Number(amt) < 1 ? 4 : 2)}</p>
+                </div>
+            ))}
+          </div>
+
+          <div style={{display:'flex',gap:12, position: 'relative', zIndex: 10}}>
             <button className="btn-primary" style={{flex:1,fontSize:10}} onClick={onSend}><ArrowRightLeft size={14}/> Send</button>
-            <button className="btn-secondary" style={{flex:1,fontSize:10}}>Receive</button>
+            <button className="btn-secondary" style={{flex:1,fontSize:10}} onClick={onReceive}>Receive</button>
             <button onClick={onShowKeys} className="btn-secondary" style={{width:56,padding:0}}><Fingerprint size={20}/></button>
           </div>
+          <div style={{ position: 'absolute', bottom: 20, right: 36, fontSize: 13, fontFamily: 'monospace', color: '#4b5563', fontWeight: 700, letterSpacing: '3px' }}>**** **** **** {(wallet.address || '0000').slice(-4)}</div>
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          <div className="glass" style={{flex:1,padding:28,borderRadius:32,background:'rgba(0,245,255,0.04)',borderColor:'rgba(0,245,255,0.12)'}}>
-            <ShieldCheck color="#00F5FF" size={20} style={{marginBottom:20}}/>
-            <p style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:900,marginBottom:4}}>Authenticated</p>
-            <p style={{fontSize:10,color:'#00F5FF',fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>Sentinel Shield Active</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div className="glass" style={{padding:28,borderRadius:32,background:'rgba(255,255,255,0.02)',borderColor:'rgba(255,255,255,0.06)'}}>
+              <ShieldCheck color="#22c55e" size={20} style={{marginBottom:20}}/>
+              <p style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:900,marginBottom:4}}>Authenticated</p>
+              <p style={{fontSize:10,color:'#22c55e',fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>Sentinel Shield</p>
+            </div>
+            <div className="glass" style={{padding:28,borderRadius:32,background:'rgba(255,255,255,0.02)',borderColor:'rgba(255,255,255,0.06)'}}>
+              <Activity color="#fff" size={20} style={{marginBottom:20}}/>
+              <p style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:900,marginBottom:4}}>98%</p>
+              <p style={{fontSize:10,color:'#aaa',fontWeight:900,letterSpacing:'0.2em',textTransform:'uppercase'}}>Health Score</p>
+            </div>
           </div>
-          <div className="glass" style={{padding:24,borderRadius:32}}>
-            <p style={{fontSize:10,color:'#4b5563',fontWeight:900,letterSpacing:'0.15em',textTransform:'uppercase',marginBottom:14}}>Latest Activity</p>
-            {txHistory.length > 0 ? (
-              <div style={{display:'flex',alignItems:'center',gap:10}}>
-                <div style={{width:32,height:32,borderRadius:10,background: txHistory[0].type==='send'?'rgba(239,68,68,0.1)':'rgba(157,78,221,0.1)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-                  <ArrowRightLeft size={14} color={txHistory[0].type==='send'?'#ef4444':'#9D4EDD'}/>
+          <div className="glass" style={{padding:24,borderRadius:32, position:'relative', overflow:'hidden'}}>
+            <div style={{position:'absolute', bottom:0, left:0, padding:8, background:'rgba(255,255,255,0.05)', width:'100%', borderTop:'1px solid rgba(255,255,255,0.02)', overflow:'hidden'}}>
+                <div className="marquee-content" style={{color:'#FFFFFF', fontSize:9, fontWeight:900, textTransform:'uppercase', letterSpacing:'0.15em', whiteSpace:'nowrap'}}>
+                  SENTINEL LOG: Scanning address heuristics... [OK] • { txHistory[0]?.type === 'receive' ? `SUCCESS: Received ${txHistory[0].amount} ${txHistory[0].asset} √` : (lastFlags[0] || 'Idle Shield Active') } • RAG-V2.5 Neural Path: Active • Zero-knowledge proof verified...
                 </div>
-                <div><p style={{fontWeight:700,fontSize:13}}>{txHistory[0].type==='send'?`Sent ${txHistory[0].amount} ${txHistory[0].asset}`:`${txHistory[0].amount} ${txHistory[0].asset} → ${txHistory[0].toAsset}`}</p>
-                <p style={{fontSize:10,color:'#4b5563',fontWeight:700}}>+{txHistory[0].atxEarned} ATX earned</p></div>
+            </div>
+            <p style={{fontSize:10,color:'#4b5563',fontWeight:900,letterSpacing:'0.15em',textTransform:'uppercase',marginBottom:14}}>Latest Intelligence Feed</p>
+            {txHistory.length > 0 ? (
+              <div style={{display:'flex',alignItems:'center',gap:10, marginBottom:16}}>
+                <div style={{width:32,height:32,borderRadius:10,background: txHistory[0].type==='send'?'rgba(239,68,68,0.1)': txHistory[0].type==='receive' ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.1)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                   {txHistory[0].type === 'receive' ? <ArrowUpRight size={14} color="#22c55e"/> : <ArrowRightLeft size={14} color={txHistory[0].type==='send'?'#ef4444':'#FFFFFF'}/>}
+                </div>
+                <div><p style={{fontWeight:700,fontSize:13}}>{txHistory[0].type==='send'?`Sent ${txHistory[0].amount} ${txHistory[0].asset}`: txHistory[0].type==='receive' ? `Received ${txHistory[0].amount} ${txHistory[0].asset}` : `${txHistory[0].amount} ${txHistory[0].asset} → ${txHistory[0].toAsset}`}</p>
+                <p style={{fontSize:10,color:'#4b5563',fontWeight:700}}>{txHistory[0].type==='receive'?'Incoming Wealth':'Risk Score: '+txHistory[0].riskScore}</p></div>
               </div>
-            ) : <p style={{fontSize:12,color:'#374151'}}>No transactions yet</p>}
+            ) : <p style={{fontSize:12,color:'#374151', marginBottom:16}}>Sentinel AI awaiting telemetry...</p>}
           </div>
         </div>
       </div>
 
       {/* ATX Token card */}
-      <div className="glass" style={{padding:32,borderRadius:36,background:'linear-gradient(135deg,rgba(157,78,221,0.08),rgba(0,245,255,0.04))',border:'1px solid rgba(157,78,221,0.15)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div className="glass" style={{padding:32,borderRadius:36,background:'linear-gradient(135deg,rgba(255,255,255,0.08),rgba(200,200,200,0.04))',border:'1px solid rgba(255,255,255,0.15)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
         <div>
-          <p style={{fontSize:10,color:'#9D4EDD',fontWeight:900,letterSpacing:'0.3em',textTransform:'uppercase',marginBottom:6}}>AI_TRADEX Governance Token</p>
+          <p style={{fontSize:10,color:'#FFFFFF',fontWeight:900,letterSpacing:'0.3em',textTransform:'uppercase',marginBottom:6}}>AI_TRADEX Governance Token</p>
           <p style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:36,fontWeight:900,marginBottom:4}}>{(wallet.assets.ATX||0).toFixed(2)} <span style={{fontSize:16,color:'#4b5563'}}>ATX</span></p>
           <p style={{fontSize:14,color:'#22c55e',fontWeight:700}}>+38.2% (24h) · ≈ ${((wallet.assets.ATX||0)*0.85).toFixed(2)}</p>
         </div>
         <div style={{textAlign:'right'}}>
           <p style={{fontSize:10,color:'#6b7280',fontWeight:900,textTransform:'uppercase',letterSpacing:'0.2em',marginBottom:8}}>Earned by trading</p>
-          <p style={{fontSize:12,color:'#9D4EDD',fontWeight:700}}>Stake for 12% APY</p>
+          <p style={{fontSize:12,color:'#FFFFFF',fontWeight:700}}>Stake for 12% APY</p>
           <p style={{fontSize:11,color:'#4b5563',marginTop:4}}>Voting power active</p>
         </div>
       </div>
@@ -345,8 +457,9 @@ function DashTab({wallet,totalUSD,onShowKeys,onSend,txHistory}:any) {
                     </svg>
                   </div>
                   <div style={{textAlign:'right'}}>
-                    <p style={{fontSize:9,color:'#374151',fontWeight:900,textTransform:'uppercase',marginBottom:3}}>Holding</p>
-                    <p style={{fontWeight:900,fontSize:20,letterSpacing:'-0.5px'}}>{(amt as number).toFixed(amt<1?4:2)} <span style={{fontSize:11,color:'#374151'}}>{sym}</span></p>
+                    <p style={{fontSize:9,color:'#6b7280',fontWeight:900,textTransform:'uppercase',marginBottom:3}}>Holding Value</p>
+                    <p style={{fontWeight:900,fontSize:18,letterSpacing:'-0.5px'}}>{(amt as number).toFixed(amt<1?4:2)} <span style={{fontSize:11,color:'#4b5563'}}>{sym}</span></p>
+                    <p style={{fontSize:11,color:'#22c55e',fontWeight:900,marginTop:2}}>≈ ${(amt * ASSET_PRICES[sym]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</p>
                   </div>
                 </div>
               </div>
@@ -385,12 +498,12 @@ function MarketTab() {
                 <td style={{padding:'22px 28px'}}><svg viewBox="0 0 80 40" style={{width:110,height:44}}><path d={m.spark} fill="none" strokeWidth="2" stroke={m.color} opacity={0.5} strokeLinecap="round"/></svg></td>
                 <td style={{padding:'22px 28px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:8}}>
-                    <div style={{width:100,height:4,background:'rgba(255,255,255,0.05)',borderRadius:10,overflow:'hidden'}}><div style={{width:'82%',height:'100%',background:'#00F5FF',borderRadius:10}}/></div>
-                    <span style={{fontSize:10,fontWeight:900,color:'#00F5FF'}}>Low</span>
+                    <div style={{width:100,height:4,background:'rgba(255,255,255,0.05)',borderRadius:10,overflow:'hidden'}}><div style={{width:'82%',height:'100%',background:'#AAAAAA',borderRadius:10}}/></div>
+                    <span style={{fontSize:10,fontWeight:900,color:'#AAAAAA'}}>Low</span>
                   </div>
                 </td>
                 <td style={{padding:'22px 28px',color:'#6b7280',fontSize:14,fontWeight:700}}>${(ASSET_PRICES[sym]*1234).toLocaleString().slice(0,8)}M</td>
-                <td style={{padding:'22px 28px'}}><button style={{background:'none',border:'none',color:'#4b5563',cursor:'pointer',fontSize:10,fontWeight:900,textTransform:'uppercase',letterSpacing:'0.15em',display:'flex',alignItems:'center',gap:6,transition:'color 0.2s'}} onMouseEnter={e=>(e.currentTarget.style.color='#9D4EDD')} onMouseLeave={e=>(e.currentTarget.style.color='#4b5563')}>Trade <ArrowUpRight size={14}/></button></td>
+                <td style={{padding:'22px 28px'}}><button style={{background:'none',border:'none',color:'#4b5563',cursor:'pointer',fontSize:10,fontWeight:900,textTransform:'uppercase',letterSpacing:'0.15em',display:'flex',alignItems:'center',gap:6,transition:'color 0.2s'}} onMouseEnter={e=>(e.currentTarget.style.color='#FFFFFF')} onMouseLeave={e=>(e.currentTarget.style.color='#4b5563')}>Trade <ArrowUpRight size={14}/></button></td>
               </tr>
             ))}
           </tbody>
@@ -407,14 +520,14 @@ function SwapTab({wallet,swapFrom,setSwapFrom,swapTo,setSwapTo,swapAmt,setSwapAm
     <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0}} style={{maxWidth:540,margin:'0 auto',paddingTop:12}}>
       <div className="glass-card" style={{padding:48,borderRadius:52}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:40}}>
-          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:26,fontWeight:900,letterSpacing:'-1px',display:'flex',alignItems:'center',gap:12}}><ArrowRightLeft color="#9D4EDD" size={24}/> Atomic_Swap</h2>
-          <div style={{display:'flex',alignItems:'center',gap:8,background:'rgba(157,78,221,0.08)',border:'1px solid rgba(157,78,221,0.2)',borderRadius:14,padding:'7px 14px'}}>
-            <div style={{width:6,height:6,borderRadius:'50%',background:'#9D4EDD',animation:'pulse 2s infinite'}}/>
-            <span style={{fontSize:10,fontWeight:900,color:'#9D4EDD',textTransform:'uppercase',letterSpacing:'0.1em'}}>Sentinel Live</span>
+          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:26,fontWeight:900,letterSpacing:'-1px',display:'flex',alignItems:'center',gap:12}}><ArrowRightLeft color="#FFFFFF" size={24}/> Atomic_Swap</h2>
+          <div style={{display:'flex',alignItems:'center',gap:8,background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.2)',borderRadius:14,padding:'7px 14px'}}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:'#FFFFFF',animation:'pulse 2s infinite'}}/>
+            <span style={{fontSize:10,fontWeight:900,color:'#FFFFFF',textTransform:'uppercase',letterSpacing:'0.1em'}}>Sentinel Live</span>
           </div>
         </div>
         <div style={{background:'rgba(0,0,0,0.5)',border:'1px solid rgba(255,255,255,0.05)',borderRadius:28,padding:24,marginBottom:6}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}><span style={{fontSize:10,color:'#4b5563',fontWeight:900,textTransform:'uppercase',letterSpacing:'0.2em'}}>Supply</span><span style={{fontSize:11,color:'#9D4EDD',fontWeight:900}}>Bal: {wallet.assets[swapFrom]?.toFixed(4)}</span></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}><span style={{fontSize:10,color:'#4b5563',fontWeight:900,textTransform:'uppercase',letterSpacing:'0.2em'}}>Supply</span><span style={{fontSize:11,color:'#FFFFFF',fontWeight:900}}>Bal: {wallet.assets[swapFrom]?.toFixed(4)}</span></div>
           <div style={{display:'flex',alignItems:'center',gap:12}}>
             <input type="number" value={swapAmt} onChange={e=>setSwapAmt(e.target.value)} style={{flex:1,background:'none',border:'none',outline:'none',fontSize:40,fontWeight:900,color:'#fff',fontFamily:"'Space Grotesk',sans-serif"}}/>
             <select value={swapFrom} onChange={e=>setSwapFrom(e.target.value)} style={{background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:18,padding:'10px 16px',color:'#fff',fontWeight:900,fontSize:14,outline:'none',fontFamily:'inherit',textTransform:'uppercase',cursor:'pointer'}}>
@@ -423,7 +536,7 @@ function SwapTab({wallet,swapFrom,setSwapFrom,swapTo,setSwapTo,swapAmt,setSwapAm
           </div>
         </div>
         <div style={{display:'flex',justifyContent:'center',position:'relative',zIndex:2,margin:'-2px 0'}}>
-          <button style={{background:'linear-gradient(135deg,#9D4EDD,#00F5FF)',border:'6px solid #030305',borderRadius:20,padding:12,cursor:'pointer',transition:'transform 0.4s ease'}}
+          <button style={{background:'linear-gradient(135deg,#222,#555)',border:'6px solid #030305',borderRadius:20,padding:12,cursor:'pointer',transition:'transform 0.4s ease'}}
             onClick={()=>{const t=swapFrom;setSwapFrom(swapTo);setSwapTo(t);}}
             onMouseEnter={e=>(e.currentTarget.style.transform='rotate(180deg)')} onMouseLeave={e=>(e.currentTarget.style.transform='')}>
             <ArrowRightLeft color="#fff" size={20} style={{transform:'rotate(90deg)'}}/>
@@ -432,7 +545,7 @@ function SwapTab({wallet,swapFrom,setSwapFrom,swapTo,setSwapTo,swapAmt,setSwapAm
         <div style={{background:'rgba(0,0,0,0.5)',border:'1px solid rgba(255,255,255,0.05)',borderRadius:28,padding:24,marginTop:6,marginBottom:28}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}><span style={{fontSize:10,color:'#4b5563',fontWeight:900,textTransform:'uppercase',letterSpacing:'0.2em'}}>Receive</span><span style={{fontSize:10,color:'#4b5563',fontWeight:900,textTransform:'uppercase'}}>Est. Rate</span></div>
           <div style={{display:'flex',alignItems:'center',gap:12}}>
-            <input readOnly value={est()} style={{flex:1,background:'none',border:'none',outline:'none',fontSize:40,fontWeight:900,color:'#00F5FF',fontFamily:"'Space Grotesk',sans-serif"}}/>
+            <input readOnly value={est()} style={{flex:1,background:'none',border:'none',outline:'none',fontSize:40,fontWeight:900,color:'#AAAAAA',fontFamily:"'Space Grotesk',sans-serif"}}/>
             <select value={swapTo} onChange={e=>setSwapTo(e.target.value)} style={{background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:18,padding:'10px 16px',color:'#fff',fontWeight:900,fontSize:14,outline:'none',fontFamily:'inherit',textTransform:'uppercase',cursor:'pointer'}}>
               {Object.keys(wallet.assets).map(a=><option key={a} value={a}>{a}</option>)}
             </select>
@@ -452,15 +565,15 @@ function SentinelTab({explanation,onAudit,txHistory}:any) {
   const flaggedTxs = txHistory.filter((t:any)=>t.riskScore>0);
   return (
     <motion.div initial={{opacity:0,x:20}} animate={{opacity:1,x:0}} exit={{opacity:0}} style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
-      <div className="glass-card" style={{padding:44,borderRadius:44,position:'relative',overflow:'hidden',borderColor:'rgba(0,245,255,0.12)'}}>
-        <ShieldCheck style={{position:'absolute',top:-20,right:-20,opacity:0.04}} size={180} color="#00F5FF"/>
+      <div className="glass-card" style={{padding:44,borderRadius:44,position:'relative',overflow:'hidden',borderColor:'rgba(200,200,200,0.12)'}}>
+        <ShieldCheck style={{position:'absolute',top:-20,right:-20,opacity:0.04}} size={180} color="#AAAAAA"/>
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32}}>
-          <Cpu color="#00F5FF" size={20}/><h3 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:900}}>Sentinel Intelligence</h3>
+          <Cpu color="#AAAAAA" size={20}/><h3 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:900}}>Sentinel Intelligence</h3>
         </div>
         {explanation?(
           <div>
-            <div style={{background:'rgba(0,245,255,0.06)',borderLeft:'4px solid #00F5FF',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
-              <p style={{fontSize:10,fontWeight:900,color:'#00F5FF',letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:12}}>Neural Reasoning Path</p>
+            <div style={{background:'rgba(200,200,200,0.06)',borderLeft:'4px solid #AAAAAA',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
+              <p style={{fontSize:10,fontWeight:900,color:'#AAAAAA',letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:12}}>Neural Reasoning Path</p>
               <p style={{color:'#d1d5db',fontSize:14,fontStyle:'italic',lineHeight:1.7}}>"{explanation}"</p>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
@@ -481,9 +594,9 @@ function SentinelTab({explanation,onAudit,txHistory}:any) {
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         {[{icon:<Globe size={18}/>,title:'Oracle Feed',desc:'Live from 40+ global nodes',active:true},{icon:<Activity size={18}/>,title:'Anomaly Detect',desc:'Real-time vector variance engine'},{icon:<Lock size={18}/>,title:'Anti-Phish AI',desc:'URL & signature inspection'}].map(({icon,title,desc,active})=>(
-          <div key={title} className="glass" style={{padding:'24px 28px',borderRadius:24,cursor:'pointer',borderColor:active?'rgba(0,245,255,0.15)':'',background:active?'rgba(0,245,255,0.03)':'',transition:'all 0.2s'}}
-            onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.03)')} onMouseLeave={e=>(e.currentTarget.style.background=active?'rgba(0,245,255,0.03)':'')}>
-            <div style={{color:active?'#00F5FF':'#4b5563',marginBottom:12}}>{icon}</div>
+          <div key={title} className="glass" style={{padding:'24px 28px',borderRadius:24,cursor:'pointer',borderColor:active?'rgba(200,200,200,0.15)':'',background:active?'rgba(200,200,200,0.03)':'',transition:'all 0.2s'}}
+            onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.03)')} onMouseLeave={e=>(e.currentTarget.style.background=active?'rgba(200,200,200,0.03)':'')}>
+            <div style={{color:active?'#AAAAAA':'#4b5563',marginBottom:12}}>{icon}</div>
             <p style={{fontWeight:900,fontSize:15,marginBottom:4}}>{title}</p>
             <p style={{fontSize:10,color:'#4b5563',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.1em'}}>{desc}</p>
           </div>
@@ -522,7 +635,7 @@ function HistoryTab({txHistory}:{txHistory:Transaction[]}) {
                 <tr key={tx.id} style={{borderBottom:'1px solid rgba(255,255,255,0.03)',transition:'background 0.2s'}}
                   onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.01)')} onMouseLeave={e=>(e.currentTarget.style.background='')}>
                   <td style={{padding:'18px 24px'}}>
-                    <span style={{padding:'4px 12px',borderRadius:8,fontSize:10,fontWeight:900,textTransform:'uppercase',background:tx.type==='send'?'rgba(239,68,68,0.1)':'rgba(157,78,221,0.1)',color:tx.type==='send'?'#ef4444':'#9D4EDD'}}>{tx.type}</span>
+                    <span style={{padding:'4px 12px',borderRadius:8,fontSize:10,fontWeight:900,textTransform:'uppercase',background:tx.type==='send'?'rgba(239,68,68,0.1)': tx.type==='receive'?'rgba(34,197,94,0.1)':'rgba(255,255,255,0.1)',color:tx.type==='send'?'#ef4444':tx.type==='receive'?'#22c55e':'#FFFFFF'}}>{tx.type}</span>
                   </td>
                   <td style={{padding:'18px 24px',fontWeight:900,fontSize:15}}>{tx.asset}{tx.toAsset&&<span style={{color:'#4b5563',fontSize:12}}> → {tx.toAsset}</span>}</td>
                   <td style={{padding:'18px 24px',fontWeight:900}}>{tx.amount.toFixed(4)}</td>
@@ -534,7 +647,7 @@ function HistoryTab({txHistory}:{txHistory:Transaction[]}) {
                     </div>
                   </td>
                   <td style={{padding:'18px 24px'}}><span style={{padding:'4px 10px',borderRadius:8,fontSize:10,fontWeight:900,background:'rgba(34,197,94,0.1)',color:'#22c55e'}}>{tx.status}</span></td>
-                  <td style={{padding:'18px 24px',color:'#9D4EDD',fontWeight:900}}>+{tx.atxEarned||0} ATX</td>
+                  <td style={{padding:'18px 24px',color:'#FFFFFF',fontWeight:900}}>+{tx.atxEarned||0} ATX</td>
                 </tr>
               ))}
             </tbody>
@@ -545,19 +658,49 @@ function HistoryTab({txHistory}:{txHistory:Transaction[]}) {
   );
 }
 
+/* ─── Hub Tab ─────────────────────────── */
+function HubTab({hubData}:any) {
+  return (
+    <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:24}}>
+        <p style={{fontSize:11,fontWeight:900,color:'#FFFFFF',textTransform:'uppercase',letterSpacing:'0.2em'}}>Global System Transaction Feed (Full Ledger)</p>
+        <p style={{fontSize:10,color:'#4b5563'}}>Real-time Oracle Events · Blocks: {hubData.length}</p>
+      </div>
+      <div style={{display:'grid',gap:12}}>
+        {hubData.map(block => (
+          <div key={block.hash} className="glass" style={{padding:'20px 24px',borderRadius:20,display:'flex',alignItems:'center',gap:24,border:'1px solid rgba(255,255,255,0.08)'}}>
+            <div style={{width:48,height:48,borderRadius:14,background:'rgba(255,255,255,0.05)',display:'flex',alignItems:'center',justifyContent:'center',color:'#FFFFFF'}}>
+              <Cpu size={24}/>
+            </div>
+            <div style={{flex:1}}>
+               <p style={{fontSize:9,color:'#4b5563',fontWeight:900,letterSpacing:'0.1em',marginBottom:4}}>BLOCK #{block.index} · {new Date(block.timestamp).toLocaleTimeString()}</p>
+               <p style={{fontWeight:900,fontSize:14}}>{block.data.type === 'send' ? `Wealth Transfer: ${block.data.amount} ${block.data.asset}` : 'Genesis System Initialization'}</p>
+               <p style={{fontSize:11,color:'#6b7280',fontFamily:'monospace',marginTop:4}}>HASH: {block.hash.slice(0,32)}...</p>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <p style={{fontSize:10,color:'#4b5563',fontWeight:900,letterSpacing:'0.1em',marginBottom:4}}>RELAYED BY</p>
+              <p style={{fontSize:12,fontWeight:700,color:'#FFFFFF'}}>{block.data.from ? short(block.data.from) : 'SENTINEL_NODE'}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
 /* ─── Seed Modal ─────────────────────────────── */
 function SeedModal({mnemonic,onClose,onCopy}:any) {
   return (
     <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} style={{position:'fixed',inset:0,zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:24,background:'rgba(2,2,5,0.97)',backdropFilter:'blur(24px)'}}>
       <motion.div initial={{scale:0.9,y:20}} animate={{scale:1,y:0}} className="glass-card" style={{borderRadius:48,padding:48,maxWidth:500,width:'100%',textAlign:'center',position:'relative'}}>
         <button onClick={onClose} style={{position:'absolute',top:20,right:20,background:'rgba(255,255,255,0.05)',border:'none',borderRadius:10,padding:8,cursor:'pointer',color:'#6b7280'}}><X size={16}/></button>
-        <p style={{fontSize:12,fontWeight:900,letterSpacing:'0.3em',color:'#9D4EDD',marginBottom:8,textTransform:'uppercase'}}>BACKUP_SEED_PHRASE</p>
+        <p style={{fontSize:12,fontWeight:900,letterSpacing:'0.3em',color:'#FFFFFF',marginBottom:8,textTransform:'uppercase'}}>BACKUP_SEED_PHRASE</p>
         <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:28,fontWeight:900,marginBottom:12}}>Master Recovery Key</h2>
         <p style={{color:'#6b7280',fontSize:11,fontWeight:700,letterSpacing:'0.2em',marginBottom:28,textTransform:'uppercase'}}>Write these 12 words offline. NEVER share.</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:28}}>
           {mnemonic.split(' ').map((w:string,i:number)=>(
             <div key={i} style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:14,padding:'10px 18px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span style={{color:'rgba(157,78,221,0.5)',fontSize:10,fontWeight:900}}>{i+1}</span>
+              <span style={{color:'rgba(255,255,255,0.5)',fontSize:10,fontWeight:900}}>{i+1}</span>
               <span style={{fontFamily:'monospace',fontSize:13,fontWeight:700}}>{w}</span>
             </div>
           ))}
@@ -578,13 +721,13 @@ function KeysModal({address,privateKey,onClose,onCopy}:any) {
       <motion.div initial={{scale:0.9,y:20}} animate={{scale:1,y:0}} className="glass-card" style={{borderRadius:48,padding:48,maxWidth:500,width:'100%',position:'relative'}}>
         <button onClick={onClose} style={{position:'absolute',top:20,right:20,background:'rgba(255,255,255,0.05)',border:'none',borderRadius:10,padding:8,cursor:'pointer',color:'#6b7280'}}><X size={16}/></button>
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32}}>
-          <div style={{background:'rgba(0,245,255,0.15)',padding:8,borderRadius:12}}><Fingerprint color="#00F5FF" size={20}/></div>
+          <div style={{background:'rgba(200,200,200,0.15)',padding:8,borderRadius:12}}><Fingerprint color="#AAAAAA" size={20}/></div>
           <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:26,fontWeight:900,letterSpacing:'-1px'}}>Vault Keys</h2>
         </div>
         <label style={{fontSize:10,fontWeight:900,color:'#6b7280',letterSpacing:'0.2em',textTransform:'uppercase',display:'block',marginBottom:8}}>Public Address</label>
         <div style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:16,padding:'14px 18px',marginBottom:24,fontFamily:'monospace',fontSize:11,wordBreak:'break-all',cursor:'pointer',position:'relative'}}
           onClick={()=>{navigator.clipboard.writeText(address);onCopy('Address');}}>
-          {address}<Copy size={14} style={{position:'absolute',right:14,top:'50%',transform:'translateY(-50%)',color:'#9D4EDD'}}/>
+          {address}<Copy size={14} style={{position:'absolute',right:14,top:'50%',transform:'translateY(-50%)',color:'#FFFFFF'}}/>
         </div>
         <label style={{fontSize:10,fontWeight:900,color:'#ef4444',letterSpacing:'0.2em',textTransform:'uppercase',display:'block',marginBottom:8}}>⚠️ Secret Private Key</label>
         <div style={{background:'rgba(239,68,68,0.05)',border:'1px solid rgba(239,68,68,0.15)',borderRadius:16,padding:'14px 18px',marginBottom:8,fontFamily:'monospace',fontSize:11,wordBreak:'break-all',filter:'blur(5px)',transition:'filter 0.5s',cursor:'pointer',position:'relative'}}

@@ -11,5 +11,6 @@ router.get('/transactions',    wc.getTransactions);
 router.post('/explain',        wc.explainFraud);
 router.post('/add-rule',       wc.addFraudRule);
 router.post('/auth/login',     wc.demoLogin);
+router.get('/system-hub',      wc.getSystemHub);
 
 module.exports = router;

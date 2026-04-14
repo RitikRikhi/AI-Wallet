@@ -1,117 +1,121 @@
 /**
- * Fraud Detection Service (V2 - Context-Aware with Reputation Cooldown)
+ * Fraud Detection Service (V2 - Context-Aware, Per-User History)
  */
 
-// In-memory user state
-let userHistory = {
-    globalRiskReputation: 0, // NEW: Persistent reputation score
-    lastTransactionTime: 0,
-    lastLocation: null,
-    lastDevice: null,
-    dailySpending: 0,
-    transactionCount: 0,
-    lastTransactionAmount: 0
-};
+const userHistories = {};
 
-// Threshold constants
-const LARGE_AMOUNT_THRESHOLD = 5000; // Lowered to trigger easier for testing everyday scenarios
-const TIME_GAP_LIMIT_MS = 10000; // 10 seconds
-const DAILY_SPEND_LIMIT = 50000;
+function getUserHistory(userId) {
+    if (!userHistories[userId]) {
+        userHistories[userId] = {
+            globalRiskReputation: 0,
+            lastTransactionTime: 0,
+            lastTransactionAmount: 0,
+            dailySpending: 0,
+            transactionCount: 0,
+            knownLocations: ['US', 'UK'],
+            knownDevices: ['Desktop-Chrome', 'Mobile-iOS']
+        };
+    }
+    return userHistories[userId];
+}
 
-function evaluateFraudRisk(amount, location, device, isVPN) {
+// Randomly generate some demo context occasionally to make risk scores dynamic
+function simulateContext(userId, amount) {
+    const isVPN = Math.random() < 0.15; // 15% chance of VPN
+    const locations = ['US', 'UK', 'RU', 'CH', 'NG'];
+    const devices = ['Desktop-Chrome', 'Mobile-iOS', 'Linux-Firefox', 'Unknown-Device'];
+    
+    // Most of the time use known info, occasionally randomize 
+    const location = Math.random() < 0.2 ? locations[Math.floor(Math.random() * locations.length)] : 'US';
+    const device = Math.random() < 0.2 ? devices[Math.floor(Math.random() * devices.length)] : 'Desktop-Chrome';
+    
+    return { location, device, isVPN };
+}
+
+function evaluateFraudRisk(userId, amount, asset, recipientAddress, knownAddresses, callerAddress) {
     let transactionRisk = 0;
     const reasons = [];
     const now = Date.now();
+    
+    const history = getUserHistory(userId);
+    const { location, device, isVPN } = simulateContext(userId, amount);
 
-    // 1. Check for High Amount
-    if (amount > LARGE_AMOUNT_THRESHOLD) {
-        transactionRisk += 30;
-        reasons.push(`High amount [Context: Tried to send $${amount}]`);
-    }
-
-    // 2. Small pre-authorization test
-    if (amount <= 2.0 && amount > 0) {
+    // 1. New recipient
+    if (!knownAddresses.includes(recipientAddress)) {
         transactionRisk += 15;
-        reasons.push(`Small pre-authorization test [Context: Suspicious test charge of $${amount}]`);
+        reasons.push(`First-time transfer to ${recipientAddress.substring(0, 8)}... [Context: Unknown node]`);
     }
 
-    // 3. Amount Spike
-    if (userHistory.lastTransactionAmount > 0 && amount > userHistory.lastTransactionAmount * 4) {
-        transactionRisk += 20;
-        reasons.push(`Amount spike compared to previous [Context: $${amount} is dramatically higher than the previous $${userHistory.lastTransactionAmount}]`);
+    // 2. Self Transfer
+    if (recipientAddress === callerAddress) {
+        transactionRisk += 10;
+        reasons.push(`Cyclic transfer detected [Context: Sending directly back to origin wallet]`);
     }
 
-    // 4. Time Gap Check & Duplicate Charge
-    if (userHistory.lastTransactionTime > 0) {
-        const timeGap = now - userHistory.lastTransactionTime;
-        
-        if (timeGap < TIME_GAP_LIMIT_MS) {
-            transactionRisk += 25;
-            reasons.push(`Very short time between transactions [Context: Only ${Math.round(timeGap/1000)}s since last swipe]`);
-        }
-        
-        if (amount === userHistory.lastTransactionAmount && timeGap < 60000) {
+    // 3. Amount spike
+    if (history.lastTransactionAmount > 0 && amount > history.lastTransactionAmount * 5) {
+        transactionRisk += 25;
+        reasons.push(`Anomalous volume spike [Context: ${amount} ${asset} is >5x recent average]`);
+    }
+
+    // 4. Time gap
+    if (history.lastTransactionTime > 0) {
+        const timeGapMs = now - history.lastTransactionTime;
+        if (timeGapMs < 15000) { // under 15 seconds
             transactionRisk += 30;
-            reasons.push(`Duplicate charge detected [Context: Exact match of $${amount} charged again rapidly]`);
+            reasons.push(`High-velocity transfer [Context: Triggered ${Math.round(timeGapMs/1000)}s after previous transaction]`);
         }
     }
 
-    // 5. Late Night Purchase (dummy simulation: let's pretend location 'Russia' triggers night flag for demo logic)
-    if (location && location.toLowerCase().includes("russia")) {
-         transactionRisk += 20;
-         reasons.push(`Late night sudden purchase [Context: Transaction from ${location} flagged as unusual timezone]`);
+    // 5. Round Number social engineering
+    if (amount >= 100 && amount === Math.floor(amount)) {
+        transactionRisk += 10;
+        reasons.push(`Heuristic match: Round number transfer [Context: Exact mathematical integers often correlate with social engineering]`);
     }
 
-    // 6. Location Change
-    if (userHistory.lastLocation && userHistory.lastLocation !== location) {
-        transactionRisk += 30;
-        reasons.push(`Location change detected [Context: Jumped from ${userHistory.lastLocation} to ${location}]`);
+    // 6. Contextual (Simulated logic for dynamic hackathon score)
+    if (!history.knownLocations.includes(location)) {
+        transactionRisk += 25;
+        reasons.push(`Geospatial anomaly [Context: Transaction originated from unexpected region: ${location}]`);
+    }
+    
+    if (!history.knownDevices.includes(device)) {
+        transactionRisk += 15;
+        reasons.push(`Device fingerprint mismatch [Context: Unrecognized signature: ${device}]`);
     }
 
-    // 7. Device Change
-    if (userHistory.lastDevice && userHistory.lastDevice !== device) {
-        transactionRisk += 20;
-        reasons.push(`Different device used [Context: Changed from ${userHistory.lastDevice} to ${device}]`);
-    }
-
-    // 8. VPN Usage
     if (isVPN) {
-        transactionRisk += 40;
-        reasons.push(`VPN usage detected [Context: Traffic hidden behind VPN node]`);
+        transactionRisk += 25;
+        reasons.push(`Network obfuscation detected [Context: Traffic routed through known VPN/Tor exit node]`);
     }
 
-    // FINAL SCORE COMPOSITION
-    let finalRiskScore = transactionRisk + userHistory.globalRiskReputation;
-    let status = 'Safe';
+    // FINAL SCORE
+    let finalRiskScore = transactionRisk + history.globalRiskReputation;
+    if (finalRiskScore > 100) finalRiskScore = 99; // Cap at 99
+
+    let status = 'safe';
     
     if (finalRiskScore >= 70) {
-        status = 'Fraud';
-        // Increase persistent bad reputation
-        userHistory.globalRiskReputation += 20; 
-    } else if (finalRiskScore >= 40) {
-        status = 'Suspicious';
-        userHistory.globalRiskReputation += 5;
+        status = 'blocked';
+        history.globalRiskReputation = Math.min(100, history.globalRiskReputation + 15);
+    } else if (finalRiskScore >= 30) {
+        status = 'warning';
+        history.globalRiskReputation += 5;
     } else {
-        // COOLDOWN MECHANISM: Good behavior reduces risk score
-        userHistory.globalRiskReputation -= 15;
-        if (userHistory.globalRiskReputation < 0) {
-            userHistory.globalRiskReputation = 0; // Floor
-        }
+        // Cooldown
+        history.globalRiskReputation = Math.max(0, history.globalRiskReputation - 20);
     }
 
-    // Update history for next transaction
-    userHistory.lastTransactionTime = now;
-    userHistory.lastLocation = location;
-    userHistory.lastDevice = device;
-    userHistory.dailySpending += amount;
-    userHistory.transactionCount += 1;
-    userHistory.lastTransactionAmount = amount;
+    // Update history
+    history.lastTransactionTime = now;
+    history.lastTransactionAmount = amount;
+    history.dailySpending += amount;
+    history.transactionCount++;
 
     return {
         riskScore: finalRiskScore,
         status,
-        reasons,
-        globalReputation: userHistory.globalRiskReputation
+        fraudFlags: reasons.map(r => ({ severity: finalRiskScore >= 70 ? 'CRITICAL' : 'MEDIUM', message: r })),
     };
 }
 
