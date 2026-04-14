@@ -72,7 +72,7 @@ Body:
 
 ---
 
-## 🧠 Core Concepts Explained (Hackathon Ready)
+## 🧠 Core Concepts Explained 
 
 ### 1. How the Fraud Detection Works
 Instead of using a black-box machine learning model, our backend uses **Rule-Based Scoring**. 
